@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+
 from requests import Request
 
 from embucket_spcs_connector import patch
@@ -34,36 +36,10 @@ def test_login_request_treats_string_none_as_no_embucket_token():
     assert "X-Embucket-Authorization" not in headers
 
 
-def test_query_request_uses_spcs_and_embucket_authorization():
+def test_query_request_uses_spcs_authorization_only():
     import snowflake.connector.network as network
 
     patch(spcs_token="spcs-token")
-
-    headers = _prepared_headers(network.SnowflakeAuth, "embucket-session-token")
-
-    assert headers["Authorization"] == 'Snowflake Token="spcs-token"'
-    assert (
-        headers["X-Embucket-Authorization"]
-        == 'Snowflake Token="embucket-session-token"'
-    )
-
-
-def test_query_request_can_use_spcs_authorization_only():
-    import snowflake.connector.network as network
-
-    patch(spcs_token="spcs-token", forward_session_token=False)
-
-    headers = _prepared_headers(network.SnowflakeAuth, "embucket-session-token")
-
-    assert headers["Authorization"] == 'Snowflake Token="spcs-token"'
-    assert "X-Embucket-Authorization" not in headers
-
-
-def test_query_request_can_disable_session_forwarding_with_env(monkeypatch):
-    import snowflake.connector.network as network
-
-    monkeypatch.setenv("EMBUCKET_SPCS_FORWARD_SESSION_TOKEN", "0")
-    patch(spcs_token="spcs-token", forward_session_token=None)
 
     headers = _prepared_headers(network.SnowflakeAuth, "embucket-session-token")
 
@@ -88,7 +64,44 @@ def test_spcs_token_file_defaults_next_to_config(monkeypatch, tmp_path):
     headers = _prepared_headers(network.SnowflakeAuth, "embucket-session-token")
 
     assert headers["Authorization"] == 'Snowflake Token="spcs-token-from-file"'
-    assert (
-        headers["X-Embucket-Authorization"]
-        == 'Snowflake Token="embucket-session-token"'
+    assert "X-Embucket-Authorization" not in headers
+
+
+def test_spcs_token_file_is_re_read_for_rotation(tmp_path):
+    import snowflake.connector.network as network
+
+    token_file = tmp_path / "embucket_spcs_token"
+    token_file.write_text("spcs-token-1", encoding="utf-8")
+
+    patch(spcs_token_file=str(token_file))
+
+    headers = _prepared_headers(network.SnowflakeAuth, "embucket-session-token")
+    assert headers["Authorization"] == 'Snowflake Token="spcs-token-1"'
+
+    token_file.write_text("spcs-token-2", encoding="utf-8")
+
+    headers = _prepared_headers(network.SnowflakeAuth, "embucket-session-token")
+    assert headers["Authorization"] == 'Snowflake Token="spcs-token-2"'
+
+
+def test_spcs_token_command_can_supply_rotated_token(tmp_path):
+    import snowflake.connector.network as network
+
+    token_file = tmp_path / "command_token"
+    token_file.write_text("spcs-token-from-command", encoding="utf-8")
+    script = tmp_path / "token_command.py"
+    script.write_text(
+        "from pathlib import Path\n"
+        f"print(Path({str(token_file)!r}).read_text().strip())\n",
+        encoding="utf-8",
     )
+
+    patch(spcs_token_command=f"{sys.executable} {script}")
+
+    headers = _prepared_headers(network.SnowflakeAuth, "embucket-session-token")
+    assert headers["Authorization"] == 'Snowflake Token="spcs-token-from-command"'
+
+    token_file.write_text("spcs-token-from-command-2", encoding="utf-8")
+
+    headers = _prepared_headers(network.SnowflakeAuth, "embucket-session-token")
+    assert headers["Authorization"] == 'Snowflake Token="spcs-token-from-command-2"'

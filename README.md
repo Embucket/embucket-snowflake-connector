@@ -2,18 +2,13 @@
 
 This package adapts `snowflake-connector-python` and Snowflake CLI for Embucket/Rustice running behind Snowpark Container Services (SPCS) public ingress.
 
-SPCS public ingress consumes the standard Snowflake `Authorization` header. Embucket still needs its own session token after `/session/v1/login-request`, so this package sends:
+SPCS public ingress consumes the standard Snowflake `Authorization` header. This package keeps the Snowflake ingress token in that header for every request:
 
 ```http
 Authorization: Snowflake Token="<spcs-token>"
-X-Embucket-Authorization: Snowflake Token="<embucket-session-token>"
 ```
 
-Rustice also has an experimental trusted-ingress mode that derives its session from Snowflake's `Sf-Context-*` ingress headers. In that mode, keep the Snowflake token in `Authorization` and disable forwarding the Embucket session token:
-
-```bash
-export EMBUCKET_SPCS_FORWARD_SESSION_TOKEN=0
-```
+When Rustice is deployed with `AUTH_TRUST_SPCS_INGRESS=true`, it derives its internal session from Snowflake's SPCS caller context headers (`Sf-Context-*`). The Embucket/Rustice token returned by `/session/v1/login-request` is only an internal server-side session id in this mode and is not sent back as client authentication.
 
 ## Install
 
@@ -65,7 +60,7 @@ snow --config-file /path/to/config.toml sql -c snowflake \
 
 ## SPCS Ingress Token
 
-SPCS public ingress requires a Snowflake token on every request. This token is separate from the Embucket/Rustice session token returned by `/session/v1/login-request`.
+SPCS public ingress requires a Snowflake token on every request. This is the only client-side auth token used by this package.
 
 The Rustice deploy script can create the ingress service user/PAT automatically. When doing it manually, create a service user with access only to the Rustice service endpoint:
 
@@ -125,10 +120,12 @@ or read the token from a file:
 export EMBUCKET_SPCS_TOKEN_FILE=/path/to/spcs-token.txt
 ```
 
-For the experimental single-authorization mode, add:
+Token rotation is easiest with `EMBUCKET_SPCS_TOKEN_FILE`: the wrapper reads the file when preparing requests, so an external refresh process or deploy script can replace the file without changing the Snowflake CLI profile. A token passed through `EMBUCKET_SPCS_TOKEN`, `EMBUCKET_SPCS_AUTHORIZATION`, or `spcs_token=` is treated as a static value for that process.
+
+For environments that mint short-lived ingress tokens, provide a token command. It is executed without a shell when a request is prepared, and it can return either the raw token or the full `Snowflake Token="..."` header value:
 
 ```bash
-export EMBUCKET_SPCS_FORWARD_SESSION_TOKEN=0
+export EMBUCKET_SPCS_TOKEN_COMMAND="/path/to/get-spcs-token"
 ```
 
 ## Python Connector
@@ -147,7 +144,7 @@ conn = connect(
     schema="public",
     warehouse="embucket",
     spcs_token="<pat-or-oauth-token-for-spcs-ingress>",
-    # forward_session_token=False,  # experimental trusted-ingress session mode
+    # or: spcs_token_command="/path/to/get-spcs-token",
 )
 
 cur = conn.cursor()
