@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import importlib
 
 from requests import Request
 
@@ -105,3 +106,63 @@ def test_spcs_token_command_can_supply_rotated_token(tmp_path):
 
     headers = _prepared_headers(network.SnowflakeAuth, "embucket-session-token")
     assert headers["Authorization"] == 'Snowflake Token="spcs-token-from-command-2"'
+
+
+def test_spcs_token_can_be_issued_from_snowflake_cli_connection(monkeypatch, tmp_path):
+    import snowflake.connector
+    import snowflake.connector.network as network
+    patch_module = importlib.import_module("embucket_spcs_connector.patch")
+
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(
+        """
+default_connection_name = "embucket_spcs"
+
+[connections.embucket_spcs]
+host = "example.snowflakecomputing.app"
+account = "embucket"
+user = "embucket"
+password = "embucket"
+spcs_token_connection = "snowflake"
+
+[connections.snowflake]
+account = "example-account"
+user = "real-user"
+password = "real-password"
+role = "ACCOUNTADMIN"
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        ["embucket-snow", "--config-file", str(config_file), "sql", "-c", "embucket_spcs"],
+    )
+
+    captured_params = {}
+
+    class FakeRest:
+        def _token_request(self, request_type):
+            assert request_type == "ISSUE"
+            return {"data": {"sessionToken": "issued-spcs-token", "validityInSecondsST": 3600}}
+
+    class FakeConnection:
+        _rest = FakeRest()
+
+        def close(self):
+            pass
+
+    def fake_connect(**params):
+        captured_params.update(params)
+        return FakeConnection()
+
+    monkeypatch.setattr(snowflake.connector, "connect", fake_connect)
+    patch_module._close_source_connection()
+
+    patch()
+
+    headers = _prepared_headers(network.SnowflakeAuth, "embucket-session-token")
+
+    assert headers["Authorization"] == 'Snowflake Token="issued-spcs-token"'
+    assert captured_params["account"] == "example-account"
+    assert captured_params["validate_default_parameters"] is False
+    assert captured_params["session_parameters"]["PYTHON_CONNECTOR_QUERY_RESULT_FORMAT"] == "json"
