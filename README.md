@@ -9,10 +9,17 @@ Authorization: Snowflake Token="<spcs-token>"
 X-Embucket-Authorization: Snowflake Token="<embucket-session-token>"
 ```
 
-## Install for Development
+## Install
 
 ```bash
-cd /home/artem/work/reps/github.com/embucket/embucket-snowflake-connector
+python -m pip install "embucket-snowflake-connector[cli] @ git+https://github.com/Embucket/embucket-snowflake-connector.git"
+```
+
+For local development:
+
+```bash
+git clone https://github.com/Embucket/embucket-snowflake-connector.git
+cd embucket-snowflake-connector
 python -m pip install -e ".[cli]"
 ```
 
@@ -40,7 +47,7 @@ snow --config-file /path/to/config.toml sql -c snowflake \
   -q "SHOW ENDPOINTS IN SERVICE RUSTICE_APP.PUBLIC.RUSTICE_SERVICE"
 ```
 
-Run Snowflake CLI through the wrapper:
+Run Snowflake CLI through the wrapper. Requests go directly to the Embucket/Rustice image behind the SPCS public endpoint, not to a Snowflake virtual warehouse:
 
 ```bash
 export EMBUCKET_SPCS_TOKEN="<pat-or-oauth-token-for-spcs-ingress>"
