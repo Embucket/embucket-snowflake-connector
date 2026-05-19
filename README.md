@@ -1,0 +1,1 @@
+# embucket-snowflake-connector
