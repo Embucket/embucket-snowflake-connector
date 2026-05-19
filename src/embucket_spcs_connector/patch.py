@@ -10,6 +10,7 @@ EMBUCKET_AUTHORIZATION_HEADER = "X-Embucket-Authorization"
 SPCS_AUTHORIZATION_ENV = "EMBUCKET_SPCS_AUTHORIZATION"
 SPCS_TOKEN_ENV = "EMBUCKET_SPCS_TOKEN"
 SPCS_TOKEN_FILE_ENV = "EMBUCKET_SPCS_TOKEN_FILE"
+SPCS_FORWARD_SESSION_TOKEN_ENV = "EMBUCKET_SPCS_FORWARD_SESSION_TOKEN"
 DEFAULT_TOKEN_FILE_NAME = "embucket_spcs_token"
 
 
@@ -23,6 +24,7 @@ class _PatchState:
     token: str | None = None
     token_file: str | None = None
     embucket_header: str = EMBUCKET_AUTHORIZATION_HEADER
+    forward_session_token: bool | None = None
     original_auth_class: type | None = None
     patched: bool = False
 
@@ -84,6 +86,19 @@ def _resolve_spcs_authorization() -> str:
     return _snowflake_authorization(token)
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _forward_session_token() -> bool:
+    if _STATE.forward_session_token is not None:
+        return _STATE.forward_session_token
+    return _env_bool(SPCS_FORWARD_SESSION_TOKEN_ENV, True)
+
+
 def _make_auth_class(network_module: Any) -> type:
     no_token = network_module.NO_TOKEN
     authorization_header = network_module.HEADER_AUTHORIZATION_KEY
@@ -102,7 +117,7 @@ def _make_auth_class(network_module: Any) -> type:
         def __call__(self, request):
             request.headers.pop(authorization_header, None)
             request.headers[authorization_header] = _resolve_spcs_authorization()
-            if self.token not in (no_token, None, "None"):
+            if _forward_session_token() and self.token not in (no_token, None, "None"):
                 request.headers[embucket_header] = _snowflake_authorization(self.token)
             return request
 
@@ -115,12 +130,15 @@ def patch(
     spcs_authorization: str | None = None,
     spcs_token_file: str | None = None,
     embucket_header: str = EMBUCKET_AUTHORIZATION_HEADER,
+    forward_session_token: bool | None = None,
 ) -> None:
     """Patch snowflake-connector-python for Embucket behind SPCS public ingress.
 
     The patch replaces the connector's SnowflakeAuth request auth adapter. The
     standard Authorization header is reserved for Snowflake SPCS ingress; the
     Embucket session token is forwarded in X-Embucket-Authorization.
+    Set forward_session_token=False for the experimental Rustice mode that
+    derives its session from Snowflake SPCS ingress headers.
     """
 
     import snowflake.connector.network as network
@@ -129,6 +147,7 @@ def patch(
     _STATE.token = spcs_token
     _STATE.token_file = spcs_token_file
     _STATE.embucket_header = embucket_header
+    _STATE.forward_session_token = forward_session_token
 
     if _STATE.patched:
         return
@@ -150,17 +169,20 @@ def connect(*args: Any, **kwargs: Any):
     - spcs_authorization
     - spcs_token_file
     - embucket_header
+    - forward_session_token
     """
 
     spcs_token = kwargs.pop("spcs_token", None)
     spcs_authorization = kwargs.pop("spcs_authorization", None)
     spcs_token_file = kwargs.pop("spcs_token_file", None)
     embucket_header = kwargs.pop("embucket_header", EMBUCKET_AUTHORIZATION_HEADER)
+    forward_session_token = kwargs.pop("forward_session_token", None)
     patch(
         spcs_token=spcs_token,
         spcs_authorization=spcs_authorization,
         spcs_token_file=spcs_token_file,
         embucket_header=embucket_header,
+        forward_session_token=forward_session_token,
     )
 
     import snowflake.connector

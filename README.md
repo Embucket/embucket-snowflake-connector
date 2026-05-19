@@ -9,6 +9,12 @@ Authorization: Snowflake Token="<spcs-token>"
 X-Embucket-Authorization: Snowflake Token="<embucket-session-token>"
 ```
 
+Rustice also has an experimental trusted-ingress mode that derives its session from Snowflake's `Sf-Context-*` ingress headers. In that mode, keep the Snowflake token in `Authorization` and disable forwarding the Embucket session token:
+
+```bash
+export EMBUCKET_SPCS_FORWARD_SESSION_TOKEN=0
+```
+
 ## Install
 
 ```bash
@@ -119,6 +125,12 @@ or read the token from a file:
 export EMBUCKET_SPCS_TOKEN_FILE=/path/to/spcs-token.txt
 ```
 
+For the experimental single-authorization mode, add:
+
+```bash
+export EMBUCKET_SPCS_FORWARD_SESSION_TOKEN=0
+```
+
 ## Python Connector
 
 ```python
@@ -135,6 +147,7 @@ conn = connect(
     schema="public",
     warehouse="embucket",
     spcs_token="<pat-or-oauth-token-for-spcs-ingress>",
+    # forward_session_token=False,  # experimental trusted-ingress session mode
 )
 
 cur = conn.cursor()

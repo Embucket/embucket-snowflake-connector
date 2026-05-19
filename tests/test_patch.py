@@ -48,6 +48,29 @@ def test_query_request_uses_spcs_and_embucket_authorization():
     )
 
 
+def test_query_request_can_use_spcs_authorization_only():
+    import snowflake.connector.network as network
+
+    patch(spcs_token="spcs-token", forward_session_token=False)
+
+    headers = _prepared_headers(network.SnowflakeAuth, "embucket-session-token")
+
+    assert headers["Authorization"] == 'Snowflake Token="spcs-token"'
+    assert "X-Embucket-Authorization" not in headers
+
+
+def test_query_request_can_disable_session_forwarding_with_env(monkeypatch):
+    import snowflake.connector.network as network
+
+    monkeypatch.setenv("EMBUCKET_SPCS_FORWARD_SESSION_TOKEN", "0")
+    patch(spcs_token="spcs-token", forward_session_token=None)
+
+    headers = _prepared_headers(network.SnowflakeAuth, "embucket-session-token")
+
+    assert headers["Authorization"] == 'Snowflake Token="spcs-token"'
+    assert "X-Embucket-Authorization" not in headers
+
+
 def test_spcs_token_file_defaults_next_to_config(monkeypatch, tmp_path):
     import snowflake.connector.network as network
 
