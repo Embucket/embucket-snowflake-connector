@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Snowflake connector/CLI patch for Embucket on Snowpark Container Services"
 readme = "README.md"
 requires-python = ">=3.9"
-license = { text = "Apache-2.0" }
+license = { text = "MIT" }
 dependencies = [
   "snowflake-connector-python>=3.18,<4",
 ]
@@ -24,6 +24,9 @@ dev = [
 
 [project.scripts]
 embucket-snow = "embucket_spcs_connector.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/embucket_spcs_connector"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
