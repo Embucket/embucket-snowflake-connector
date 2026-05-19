@@ -75,7 +75,7 @@ def _make_auth_class(network_module: Any) -> type:
         def __call__(self, request):
             request.headers.pop(authorization_header, None)
             request.headers[authorization_header] = _resolve_spcs_authorization()
-            if self.token != no_token:
+            if self.token not in (no_token, None, "None"):
                 request.headers[embucket_header] = _snowflake_authorization(self.token)
             return request
 

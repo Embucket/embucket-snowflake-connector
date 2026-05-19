@@ -23,6 +23,17 @@ def test_login_request_uses_spcs_authorization_only():
     assert "X-Embucket-Authorization" not in headers
 
 
+def test_login_request_treats_string_none_as_no_embucket_token():
+    import snowflake.connector.network as network
+
+    patch(spcs_token="spcs-token")
+
+    headers = _prepared_headers(network.SnowflakeAuth, "None")
+
+    assert headers["Authorization"] == 'Snowflake Token="spcs-token"'
+    assert "X-Embucket-Authorization" not in headers
+
+
 def test_query_request_uses_spcs_and_embucket_authorization():
     import snowflake.connector.network as network
 
