@@ -46,3 +46,26 @@ def test_query_request_uses_spcs_and_embucket_authorization():
         headers["X-Embucket-Authorization"]
         == 'Snowflake Token="embucket-session-token"'
     )
+
+
+def test_spcs_token_file_defaults_next_to_config(monkeypatch, tmp_path):
+    import snowflake.connector.network as network
+
+    config_file = tmp_path / "config.toml"
+    token_file = tmp_path / "embucket_spcs_token"
+    config_file.write_text("[connections.embucket_spcs]\n", encoding="utf-8")
+    token_file.write_text("spcs-token-from-file", encoding="utf-8")
+    monkeypatch.setattr(
+        "sys.argv",
+        ["embucket-snow", "--config-file", str(config_file), "sql"],
+    )
+
+    patch()
+
+    headers = _prepared_headers(network.SnowflakeAuth, "embucket-session-token")
+
+    assert headers["Authorization"] == 'Snowflake Token="spcs-token-from-file"'
+    assert (
+        headers["X-Embucket-Authorization"]
+        == 'Snowflake Token="embucket-session-token"'
+    )

@@ -25,7 +25,17 @@ python -m pip install -e ".[cli]"
 
 ## Snowflake CLI Wrapper
 
-Create a normal Snowflake CLI connection that points to the SPCS public ingress host:
+If Rustice was deployed with `deploy/spcs/deploy.sh`, the deploy script creates a ready-to-use Snowflake CLI config and token file:
+
+```bash
+embucket-snow --config-file /path/to/rustice/deploy/spcs/generated/config.toml \
+  sql -c embucket_spcs \
+  -q "SELECT * FROM embucket.public.smoke"
+```
+
+The wrapper automatically reads `embucket_spcs_token` next to the generated `config.toml`.
+
+To configure a profile manually, create a normal Snowflake CLI connection that points to the SPCS public ingress host:
 
 ```toml
 [connections.embucket_spcs]
@@ -45,6 +55,47 @@ Get the ingress host with:
 ```bash
 snow --config-file /path/to/config.toml sql -c snowflake \
   -q "SHOW ENDPOINTS IN SERVICE RUSTICE_APP.PUBLIC.RUSTICE_SERVICE"
+```
+
+## SPCS Ingress Token
+
+SPCS public ingress requires a Snowflake token on every request. This token is separate from the Embucket/Rustice session token returned by `/session/v1/login-request`.
+
+The Rustice deploy script can create the ingress service user/PAT automatically. When doing it manually, create a service user with access only to the Rustice service endpoint:
+
+```sql
+CREATE ROLE IF NOT EXISTS RUSTICE_INGRESS_ROLE;
+
+CREATE USER IF NOT EXISTS RUSTICE_INGRESS_SVC
+  TYPE = SERVICE
+  DEFAULT_ROLE = RUSTICE_INGRESS_ROLE;
+
+GRANT ROLE RUSTICE_INGRESS_ROLE TO USER RUSTICE_INGRESS_SVC;
+GRANT USAGE ON DATABASE RUSTICE_APP TO ROLE RUSTICE_INGRESS_ROLE;
+GRANT USAGE ON SCHEMA RUSTICE_APP.PUBLIC TO ROLE RUSTICE_INGRESS_ROLE;
+GRANT SERVICE ROLE RUSTICE_APP.PUBLIC.RUSTICE_SERVICE!RUSTICE_USER
+  TO ROLE RUSTICE_INGRESS_ROLE;
+
+CREATE AUTHENTICATION POLICY IF NOT EXISTS RUSTICE_APP.PUBLIC.RUSTICE_INGRESS_PAT_AUTH_POLICY
+  PAT_POLICY = (
+    NETWORK_POLICY_EVALUATION = ENFORCED_NOT_REQUIRED
+    REQUIRE_ROLE_RESTRICTION_FOR_SERVICE_USERS = TRUE
+  );
+
+ALTER USER IF EXISTS RUSTICE_INGRESS_SVC
+  SET AUTHENTICATION POLICY RUSTICE_APP.PUBLIC.RUSTICE_INGRESS_PAT_AUTH_POLICY FORCE;
+
+ALTER USER IF EXISTS RUSTICE_INGRESS_SVC
+  ADD PROGRAMMATIC ACCESS TOKEN RUSTICE_INGRESS_PAT
+  ROLE_RESTRICTION = 'RUSTICE_INGRESS_ROLE'
+  DAYS_TO_EXPIRY = 1;
+```
+
+Copy the returned `token_secret` into a local token file:
+
+```bash
+umask 077
+printf '%s' '<token_secret>' > /path/to/embucket_spcs_token
 ```
 
 Run Snowflake CLI through the wrapper. Requests go directly to the Embucket/Rustice image behind the SPCS public endpoint, not to a Snowflake virtual warehouse:

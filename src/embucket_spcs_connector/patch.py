@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,7 @@ EMBUCKET_AUTHORIZATION_HEADER = "X-Embucket-Authorization"
 SPCS_AUTHORIZATION_ENV = "EMBUCKET_SPCS_AUTHORIZATION"
 SPCS_TOKEN_ENV = "EMBUCKET_SPCS_TOKEN"
 SPCS_TOKEN_FILE_ENV = "EMBUCKET_SPCS_TOKEN_FILE"
+DEFAULT_TOKEN_FILE_NAME = "embucket_spcs_token"
 
 
 class EmbucketSPCSConfigError(RuntimeError):
@@ -39,6 +41,27 @@ def _read_token_file(path: str | None) -> str | None:
     return token or None
 
 
+def _arg_value(name: str) -> str | None:
+    for index, arg in enumerate(sys.argv):
+        if arg == name and index + 1 < len(sys.argv):
+            return sys.argv[index + 1]
+        prefix = f"{name}="
+        if arg.startswith(prefix):
+            return arg[len(prefix) :]
+    return None
+
+
+def _default_token_file_from_config() -> str | None:
+    config_file = _arg_value("--config-file") or os.getenv("SNOW_CONFIG_FILE")
+    if not config_file:
+        return None
+
+    candidate = Path(config_file).expanduser().resolve().with_name(DEFAULT_TOKEN_FILE_NAME)
+    if candidate.is_file():
+        return str(candidate)
+    return None
+
+
 def _resolve_spcs_authorization() -> str:
     authorization = _STATE.authorization or os.getenv(SPCS_AUTHORIZATION_ENV)
     if authorization:
@@ -47,7 +70,11 @@ def _resolve_spcs_authorization() -> str:
     token = (
         _STATE.token
         or os.getenv(SPCS_TOKEN_ENV)
-        or _read_token_file(_STATE.token_file or os.getenv(SPCS_TOKEN_FILE_ENV))
+        or _read_token_file(
+            _STATE.token_file
+            or os.getenv(SPCS_TOKEN_FILE_ENV)
+            or _default_token_file_from_config()
+        )
     )
     if not token:
         raise EmbucketSPCSConfigError(
