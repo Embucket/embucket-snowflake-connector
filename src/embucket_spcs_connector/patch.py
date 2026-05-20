@@ -6,7 +6,8 @@ import subprocess
 import sys
 import time
 import atexit
-from dataclasses import dataclass
+import threading
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +42,7 @@ class _PatchState:
     source_connection: Any | None = None
     source_token: str | None = None
     source_token_expires_at: float = 0.0
+    source_token_lock: Any = field(default_factory=threading.RLock)
     original_auth_class: type | None = None
     patched: bool = False
 
@@ -175,10 +177,11 @@ def _connector_params_from_cli_config(config_file: str, connection_name: str) ->
 
 
 def _close_source_connection() -> None:
-    connection = _STATE.source_connection
-    _STATE.source_connection = None
-    _STATE.source_token = None
-    _STATE.source_token_expires_at = 0.0
+    with _STATE.source_token_lock:
+        connection = _STATE.source_connection
+        _STATE.source_connection = None
+        _STATE.source_token = None
+        _STATE.source_token_expires_at = 0.0
     if connection is not None:
         connection.close()
 
@@ -210,46 +213,56 @@ def _get_source_connection(config_file: str, connection_name: str):
     return _STATE.source_connection
 
 
-def _issue_source_token(config_file: str, connection_name: str) -> str:
-    if _STATE.source_token and time.monotonic() < _STATE.source_token_expires_at:
-        return _STATE.source_token
+def _issue_source_token(
+    config_file: str,
+    connection_name: str,
+    *,
+    force_refresh: bool = False,
+) -> str:
+    with _STATE.source_token_lock:
+        if (
+            not force_refresh
+            and _STATE.source_token
+            and time.monotonic() < _STATE.source_token_expires_at
+        ):
+            return _STATE.source_token
 
-    connection = _get_source_connection(config_file, connection_name)
-    try:
-        token_data = _with_original_snowflake_auth(
-            lambda: connection._rest._token_request("ISSUE")
-        )
-    except Exception:
-        _close_source_connection()
         connection = _get_source_connection(config_file, connection_name)
-        token_data = _with_original_snowflake_auth(
-            lambda: connection._rest._token_request("ISSUE")
+        try:
+            token_data = _with_original_snowflake_auth(
+                lambda: connection._rest._token_request("ISSUE")
+            )
+        except Exception:
+            _close_source_connection()
+            connection = _get_source_connection(config_file, connection_name)
+            token_data = _with_original_snowflake_auth(
+                lambda: connection._rest._token_request("ISSUE")
+            )
+
+        data = token_data.get("data") or {}
+        token = data.get("sessionToken")
+        if not token:
+            raise EmbucketSPCSConfigError(
+                f"Could not issue SPCS ingress token from Snowflake connection "
+                f"{connection_name!r}."
+            )
+
+        validity = int(data.get("validityInSecondsST") or 3600)
+        _STATE.source_token = token
+        _STATE.source_token_expires_at = time.monotonic() + max(
+            0, validity - SPCS_TOKEN_REFRESH_SKEW_SECONDS
         )
-
-    data = token_data.get("data") or {}
-    token = data.get("sessionToken")
-    if not token:
-        raise EmbucketSPCSConfigError(
-            f"Could not issue SPCS ingress token from Snowflake connection "
-            f"{connection_name!r}."
-        )
-
-    validity = int(data.get("validityInSecondsST") or 3600)
-    _STATE.source_token = token
-    _STATE.source_token_expires_at = time.monotonic() + max(
-        0, validity - SPCS_TOKEN_REFRESH_SKEW_SECONDS
-    )
-    return token
+        return token
 
 
-def _read_auto_token() -> str | None:
+def _read_auto_token(*, force_refresh: bool = False) -> str | None:
     source = _auto_token_source()
     if not source:
         return None
-    return _issue_source_token(*source)
+    return _issue_source_token(*source, force_refresh=force_refresh)
 
 
-def _resolve_spcs_authorization() -> str:
+def _resolve_spcs_authorization(*, force_refresh: bool = False) -> str:
     authorization = _STATE.authorization or os.getenv(SPCS_AUTHORIZATION_ENV)
     if authorization:
         return authorization
@@ -258,7 +271,7 @@ def _resolve_spcs_authorization() -> str:
         _STATE.token
         or os.getenv(SPCS_TOKEN_ENV)
         or _read_token_command(_STATE.token_command or os.getenv(SPCS_TOKEN_COMMAND_ENV))
-        or _read_auto_token()
+        or _read_auto_token(force_refresh=force_refresh)
         or _read_token_file(
             _STATE.token_file
             or os.getenv(SPCS_TOKEN_FILE_ENV)
@@ -292,7 +305,10 @@ def _make_auth_class(network_module: Any) -> type:
 
         def __call__(self, request):
             request.headers.pop(authorization_header, None)
-            request.headers[authorization_header] = _resolve_spcs_authorization()
+            force_refresh = "/session/v1/login-request" in request.url
+            request.headers[authorization_header] = _resolve_spcs_authorization(
+                force_refresh=force_refresh
+            )
             return request
 
     return EmbucketSPCSSnowflakeAuth
