@@ -2,13 +2,15 @@
 
 This package adapts `snowflake-connector-python` and Snowflake CLI for Embucket/Rustice running behind Snowpark Container Services (SPCS) public ingress.
 
-SPCS public ingress consumes the standard Snowflake `Authorization` header. This package keeps the Snowflake ingress token in that header for every request:
+SPCS public ingress authenticates every request with the standard Snowflake header:
 
 ```http
 Authorization: Snowflake Token="<spcs-token>"
 ```
 
-When Rustice is deployed with `AUTH_TRUST_SPCS_INGRESS=true`, it derives its internal session from Snowflake's SPCS caller context headers (`Sf-Context-*`). The Embucket/Rustice token returned by `/session/v1/login-request` is only an internal server-side session id in this mode and is not sent back as client authentication.
+`embucket-snow` keeps that Snowflake ingress token in `Authorization` on login, query, and result requests. It does not send `X-Embucket-Authorization`. When Rustice is deployed with `AUTH_TRUST_SPCS_INGRESS=true`, Rustice treats successful SPCS ingress as the authentication boundary and derives its internal session from Snowflake caller context headers (`Sf-Context-*`).
+
+The token returned by Rustice `/session/v1/login-request` is only an opaque server-side session id in this mode; it is not a client authentication token.
 
 ## Install
 
@@ -24,51 +26,65 @@ cd embucket-snowflake-connector
 python -m pip install -e ".[cli]"
 ```
 
-## Snowflake CLI Wrapper
+## Recommended Workflow
 
-If Rustice was deployed with `deploy/spcs/deploy.sh`, the deploy script creates a ready-to-use Snowflake CLI config:
+Deploy Rustice to SPCS from the `rustice` repository first. The deploy script writes a ready-to-use config at `deploy/spcs/generated/config.toml`:
+
+```bash
+SNOW_CONFIG_FILE=/path/to/.snowflake/config.toml \
+SNOW_CONNECTION=snowflake \
+RUSTICE_HORIZON_DATABASE=RUSTICE_E2E \
+RUSTICE_HORIZON_ROLE=RUSTICE_E2E_ROLE \
+RUSTICE_GRANT_TO_ROLE=<role-used-by-snowflake-profile> \
+RUSTICE_HORIZON_TABLES=PUBLIC.SMOKE \
+RUSTICE_IMAGE_TAG=latest \
+./deploy/spcs/deploy.sh
+```
+
+Then query the Rustice service through SPCS:
 
 ```bash
 embucket-snow --config-file /path/to/rustice/deploy/spcs/generated/config.toml \
   sql -c embucket_spcs \
-  -q "SELECT * FROM embucket.public.smoke"
+  -q "SELECT * FROM embucket.public.smoke ORDER BY id"
 ```
 
-The generated `embucket_spcs` profile points to the SPCS ingress endpoint and tells the wrapper which regular Snowflake CLI profile to use for ingress authentication. On each process start, the wrapper logs in to Snowflake through that source profile, issues a short-lived SPCS session token with the Python connector, keeps it in memory, and sends it as the standard SPCS ingress `Authorization` header. No daily token file is required for this path.
-
-To configure a profile manually, create a normal Snowflake CLI connection that points to the SPCS public ingress host:
+The generated `embucket_spcs` profile points to the SPCS public ingress host and includes:
 
 ```toml
-[connections.embucket_spcs]
-host = "<ingress-host-without-https>"
-protocol = "https"
-port = 443
-account = "embucket"
-user = "embucket"
-password = "embucket"
-database = "embucket"
-schema = "public"
-warehouse = "embucket"
 spcs_token_connection = "snowflake"
 spcs_token_config_file = "/path/to/.snowflake/config.toml"
 ```
 
-Get the ingress host with:
+That source Snowflake profile is used only to issue short-lived SPCS ingress tokens. `embucket-snow` keeps the token in memory and sends SQL directly to the Embucket/Rustice service. No daily token file is needed for this path.
+
+The role used by `spcs_token_connection` must have access to the SPCS service endpoint. The Rustice deploy script grants that when `RUSTICE_GRANT_TO_ROLE=<role-used-by-snowflake-profile>` is set.
+
+## Manual CLI Config
+
+If you deploy SPCS manually or with `deploy/spcs/deploy.sql`, get the ingress host:
 
 ```bash
-snow --config-file /path/to/config.toml sql -c snowflake \
+snow --config-file /path/to/.snowflake/config.toml sql -c snowflake \
   -q "SHOW ENDPOINTS IN SERVICE RUSTICE_APP.PUBLIC.RUSTICE_SERVICE"
 ```
 
-## SPCS Ingress Token
+Grant the service endpoint to the role used by the source Snowflake profile:
 
-SPCS public ingress requires a Snowflake token on every request. This is the only client-side auth token used by this package.
+```sql
+GRANT USAGE ON DATABASE RUSTICE_APP TO ROLE <role-used-by-snowflake-profile>;
+GRANT USAGE ON SCHEMA RUSTICE_APP.PUBLIC TO ROLE <role-used-by-snowflake-profile>;
+GRANT SERVICE ROLE RUSTICE_APP.PUBLIC.RUSTICE_SERVICE!RUSTICE_USER
+  TO ROLE <role-used-by-snowflake-profile>;
+```
 
-The default path is automatic token issuance from a regular Snowflake CLI profile:
+Create a config:
 
 ```toml
+default_connection_name = "embucket_spcs"
+
 [connections.embucket_spcs]
-host = "<ingress-host-without-https>"
+host = "<ingress_url from SHOW ENDPOINTS, without https://>"
 protocol = "https"
 port = 443
 account = "embucket"
@@ -81,16 +97,46 @@ spcs_token_connection = "snowflake"
 spcs_token_config_file = "/path/to/.snowflake/config.toml"
 ```
 
-`spcs_token_connection` must name a normal Snowflake connection whose user/role has access to the service endpoint. The wrapper uses that connection only to issue an ingress token, then sends SQL requests directly to Embucket/Rustice.
+The `account`, `user`, `password`, `database`, `schema`, and `warehouse` values are compatibility values for the Snowflake-compatible client surface. In trusted SPCS mode, ingress authentication comes from `spcs_token_connection`, not from the placeholder password.
 
-You can also set the source profile with environment variables:
+Run a smoke query:
+
+```bash
+embucket-snow --config-file /path/to/embucket-spcs-config.toml \
+  sql -c embucket_spcs \
+  -q "SELECT * FROM embucket.public.smoke ORDER BY id"
+```
+
+## Token Sources
+
+The recommended token source is a regular Snowflake profile configured with `spcs_token_connection`. It lets `embucket-snow` issue short-lived SPCS ingress tokens automatically and keep them in memory for the CLI process.
+
+You can configure that source in TOML:
+
+```toml
+spcs_token_connection = "snowflake"
+spcs_token_config_file = "/path/to/.snowflake/config.toml"
+```
+
+or with environment variables:
 
 ```bash
 export EMBUCKET_SPCS_TOKEN_CONNECTION=snowflake
 export EMBUCKET_SPCS_TOKEN_CONFIG_FILE=/path/to/.snowflake/config.toml
 ```
 
-The Rustice deploy script can also create an ingress service user/PAT as a fallback for non-interactive environments. When doing it manually, create a service user with access only to the Rustice service endpoint:
+Fallback token sources are supported for non-interactive or custom token-management environments:
+
+```bash
+export EMBUCKET_SPCS_TOKEN="<pat-or-oauth-token-for-spcs-ingress>"
+export EMBUCKET_SPCS_AUTHORIZATION='Snowflake Token="<pat-or-oauth-token-for-spcs-ingress>"'
+export EMBUCKET_SPCS_TOKEN_FILE=/path/to/embucket_spcs_token
+export EMBUCKET_SPCS_TOKEN_COMMAND="/path/to/get-spcs-token"
+```
+
+`EMBUCKET_SPCS_TOKEN_COMMAND` is executed without a shell when a request is prepared. It may return either a raw token or a full `Snowflake Token="..."` header value.
+
+The Rustice deploy script can create an ingress service-user PAT as a fallback. If you create it manually, keep the role scoped to the service endpoint:
 
 ```sql
 CREATE ROLE IF NOT EXISTS RUSTICE_INGRESS_ROLE;
@@ -127,36 +173,9 @@ umask 077
 printf '%s' '<token_secret>' > /path/to/embucket_spcs_token
 ```
 
-Run Snowflake CLI through the wrapper. Requests go directly to the Embucket/Rustice image behind the SPCS public endpoint, not to a Snowflake virtual warehouse:
-
-```bash
-export EMBUCKET_SPCS_TOKEN="<pat-or-oauth-token-for-spcs-ingress>"
-
-embucket-snow --config-file /path/to/config.toml sql -c embucket_spcs \
-  -q "SELECT * FROM embucket.public.smoke"
-```
-
-You can also provide the full ingress authorization header:
-
-```bash
-export EMBUCKET_SPCS_AUTHORIZATION='Snowflake Token="<pat-or-oauth-token-for-spcs-ingress>"'
-```
-
-or read the token from a file:
-
-```bash
-export EMBUCKET_SPCS_TOKEN_FILE=/path/to/spcs-token.txt
-```
-
-Token rotation is easiest with `EMBUCKET_SPCS_TOKEN_FILE`: the wrapper reads the file when preparing requests, so an external refresh process or deploy script can replace the file without changing the Snowflake CLI profile. A token passed through `EMBUCKET_SPCS_TOKEN`, `EMBUCKET_SPCS_AUTHORIZATION`, or `spcs_token=` is treated as a static value for that process.
-
-For environments that mint short-lived ingress tokens, provide a token command. It is executed without a shell when a request is prepared, and it can return either the raw token or the full `Snowflake Token="..."` header value:
-
-```bash
-export EMBUCKET_SPCS_TOKEN_COMMAND="/path/to/get-spcs-token"
-```
-
 ## Python Connector
+
+Use `connect()` when embedding the same behavior in Python. The preferred path is the same automatic token issuance from a regular Snowflake profile:
 
 ```python
 from embucket_spcs_connector import connect
@@ -171,17 +190,34 @@ conn = connect(
     database="embucket",
     schema="public",
     warehouse="embucket",
-    spcs_token="<pat-or-oauth-token-for-spcs-ingress>",
-    # or: spcs_token_command="/path/to/get-spcs-token",
+    spcs_token_connection="snowflake",
+    spcs_token_config_file="/path/to/.snowflake/config.toml",
 )
 
 cur = conn.cursor()
-cur.execute("SELECT * FROM embucket.public.smoke")
+cur.execute("SELECT * FROM embucket.public.smoke ORDER BY id")
 print(cur.fetchall())
+```
+
+Static token sources are also available:
+
+```python
+conn = connect(
+    host="<ingress-host-without-https>",
+    protocol="https",
+    port=443,
+    account="embucket",
+    user="embucket",
+    password="embucket",
+    spcs_token="<pat-or-oauth-token-for-spcs-ingress>",
+    # or: spcs_token_file="/path/to/embucket_spcs_token",
+    # or: spcs_token_command="/path/to/get-spcs-token",
+)
 ```
 
 ## Notes
 
 - The package is intentionally a small overlay, not a fork of `snowflake-connector-python`.
 - The wrapper keeps the normal Snowflake CLI UX but changes request authentication headers before HTTP requests are sent.
+- Requests go directly to the Embucket/Rustice image behind the SPCS public endpoint, not to a Snowflake virtual warehouse.
 - Local Embucket/Rustice deployments do not need this patch; they can use the standard Snowflake CLI connection directly.
