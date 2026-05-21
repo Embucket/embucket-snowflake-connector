@@ -8,8 +8,12 @@ from requests import Request
 from embucket_spcs_connector import patch
 
 
-def _prepared_headers(auth, token="embucket-session-token"):
-    request = Request("POST", "https://example.snowflakecomputing.app")
+def _prepared_headers(
+    auth,
+    token="embucket-session-token",
+    url="https://example.snowflakecomputing.app",
+):
+    request = Request("POST", url)
     prepared = request.prepare()
     auth_instance = auth(token)
     return auth_instance(prepared).headers
@@ -46,6 +50,39 @@ def test_query_request_uses_spcs_authorization_only():
 
     assert headers["Authorization"] == 'Snowflake Token="spcs-token"'
     assert "X-Embucket-Authorization" not in headers
+
+
+def test_login_request_forces_auto_token_refresh(monkeypatch):
+    import snowflake.connector.network as network
+    patch_module = importlib.import_module("embucket_spcs_connector.patch")
+
+    calls = []
+
+    def fake_resolve_spcs_authorization(*, force_refresh=False):
+        calls.append(force_refresh)
+        return 'Snowflake Token="issued-spcs-token"'
+
+    monkeypatch.setattr(
+        patch_module,
+        "_resolve_spcs_authorization",
+        fake_resolve_spcs_authorization,
+    )
+    patch(spcs_token_connection="snowflake")
+
+    login_headers = _prepared_headers(
+        network.SnowflakeAuth,
+        network.NO_TOKEN,
+        "https://example.snowflakecomputing.app/session/v1/login-request",
+    )
+    query_headers = _prepared_headers(
+        network.SnowflakeAuth,
+        "embucket-session-token",
+        "https://example.snowflakecomputing.app/queries/v1/query-request",
+    )
+
+    assert login_headers["Authorization"] == 'Snowflake Token="issued-spcs-token"'
+    assert query_headers["Authorization"] == 'Snowflake Token="issued-spcs-token"'
+    assert calls == [True, False]
 
 
 def test_spcs_token_file_defaults_next_to_config(monkeypatch, tmp_path):
