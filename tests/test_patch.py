@@ -8,6 +8,27 @@ from requests import Request
 from embucket_spcs_connector import patch
 
 
+def _clear_spcs_token_sources(monkeypatch):
+    patch_module = importlib.import_module("embucket_spcs_connector.patch")
+    for name in (
+        patch_module.SPCS_AUTHORIZATION_ENV,
+        patch_module.SPCS_TOKEN_ENV,
+        patch_module.SPCS_TOKEN_FILE_ENV,
+        patch_module.SPCS_TOKEN_COMMAND_ENV,
+        patch_module.SPCS_TOKEN_CONNECTION_ENV,
+        patch_module.SPCS_TOKEN_CONFIG_FILE_ENV,
+        "SNOW_CONFIG_FILE",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(patch_module._STATE, "authorization", None)
+    monkeypatch.setattr(patch_module._STATE, "token", None)
+    monkeypatch.setattr(patch_module._STATE, "token_file", None)
+    monkeypatch.setattr(patch_module._STATE, "token_command", None)
+    monkeypatch.setattr(patch_module._STATE, "token_connection", None)
+    monkeypatch.setattr(patch_module._STATE, "token_config_file", None)
+    return patch_module
+
+
 def _prepared_headers(auth, token="embucket-session-token"):
     request = Request("POST", "https://example.snowflakecomputing.app")
     prepared = request.prepare()
@@ -166,3 +187,51 @@ role = "ACCOUNTADMIN"
     assert captured_params["account"] == "example-account"
     assert captured_params["validate_default_parameters"] is False
     assert captured_params["session_parameters"]["PYTHON_CONNECTOR_QUERY_RESULT_FORMAT"] == "json"
+
+
+def test_has_spcs_token_source_is_false_for_plain_cli_config(monkeypatch, tmp_path):
+    patch_module = _clear_spcs_token_sources(monkeypatch)
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(
+        """
+default_connection_name = "rustice_lambda"
+
+[connections.rustice_lambda]
+host = "example.lambda-url.us-east-2.on.aws"
+account = "embucket"
+user = "embucket"
+password = "embucket"
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        ["embucket-snow", "--config-file", str(config_file), "sql", "-c", "rustice_lambda"],
+    )
+
+    assert patch_module.has_spcs_token_source() is False
+
+
+def test_has_spcs_token_source_is_true_for_spcs_cli_config(monkeypatch, tmp_path):
+    patch_module = _clear_spcs_token_sources(monkeypatch)
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(
+        """
+default_connection_name = "embucket_spcs"
+
+[connections.embucket_spcs]
+host = "example.snowflakecomputing.app"
+account = "embucket"
+user = "embucket"
+password = "embucket"
+spcs_token_connection = "snowflake"
+spcs_token_config_file = "/tmp/snowflake-config.toml"
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        ["embucket-snow", "--config-file", str(config_file), "sql", "-c", "embucket_spcs"],
+    )
+
+    assert patch_module.has_spcs_token_source() is True

@@ -249,6 +249,24 @@ def _read_auto_token() -> str | None:
     return _issue_source_token(*source)
 
 
+def has_spcs_token_source() -> bool:
+    """Return true when the current environment/config can provide SPCS auth."""
+
+    if (
+        _STATE.authorization
+        or os.getenv(SPCS_AUTHORIZATION_ENV)
+        or _STATE.token
+        or os.getenv(SPCS_TOKEN_ENV)
+        or _STATE.token_file
+        or os.getenv(SPCS_TOKEN_FILE_ENV)
+        or _STATE.token_command
+        or os.getenv(SPCS_TOKEN_COMMAND_ENV)
+        or _default_token_file_from_config()
+    ):
+        return True
+    return _auto_token_source() is not None
+
+
 def _resolve_spcs_authorization() -> str:
     authorization = _STATE.authorization or os.getenv(SPCS_AUTHORIZATION_ENV)
     if authorization:

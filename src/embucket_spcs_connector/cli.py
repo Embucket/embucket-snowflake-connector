@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import sys
 
-from .patch import EmbucketSPCSConfigError, patch
+from .patch import EmbucketSPCSConfigError, has_spcs_token_source, patch
 
 
 def main() -> None:
     try:
-        patch()
+        if has_spcs_token_source():
+            patch()
     except EmbucketSPCSConfigError as exc:
         print(f"embucket-snow: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc

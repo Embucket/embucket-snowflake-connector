@@ -12,6 +12,8 @@ Authorization: Snowflake Token="<spcs-token>"
 
 The token returned by Rustice `/session/v1/login-request` is only an opaque server-side session id in this mode; it is not a client authentication token.
 
+For Rustice endpoints that are not behind SPCS ingress, such as AWS Lambda Function URLs or local Docker, use the standard Snowflake CLI directly. `embucket-snow` also works as a pass-through wrapper when the selected profile has no `spcs_token_*` settings, but it is not required for those deployments.
+
 ## Install
 
 ```bash
@@ -220,4 +222,4 @@ conn = connect(
 - The package is intentionally a small overlay, not a fork of `snowflake-connector-python`.
 - The wrapper keeps the normal Snowflake CLI UX but changes request authentication headers before HTTP requests are sent.
 - Requests go directly to the Embucket/Rustice image behind the SPCS public endpoint, not to a Snowflake virtual warehouse.
-- Local Embucket/Rustice deployments do not need this patch; they can use the standard Snowflake CLI connection directly.
+- Local, Lambda, and other non-SPCS Embucket/Rustice deployments do not need this patch; they can use the standard Snowflake CLI connection directly.
