@@ -10,6 +10,8 @@ Authorization: Snowflake Token="<spcs-token>"
 
 `embucket-snow` keeps that Snowflake ingress token in `Authorization` on login, query, and result requests. It does not send `X-Embucket-Authorization`. When Rustice is deployed with `AUTH_TRUST_SPCS_INGRESS=true`, Rustice treats successful SPCS ingress as the authentication boundary and derives its internal session from Snowflake caller context headers (`Sf-Context-*`).
 
+For large JSON results, Rustice returns Snowflake-compatible chunk descriptors. The wrapper binds a separate token provider to each connector connection and injects its current ingress token into chunk GETs only when the HTTPS origin exactly matches the SPCS endpoint already used by that connection. It does not forward the token to S3 or other external result URLs.
+
 The token returned by Rustice `/session/v1/login-request` is only an opaque server-side session id in this mode; it is not a client authentication token.
 
 ## Install
